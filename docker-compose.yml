@@ -1,0 +1,52 @@
+version: '3.8'
+
+services:
+  ollama:
+    image: ollama/ollama:rocm
+    container_name: ollama
+    privileged: true
+    devices:
+      - /dev/kfd
+      - /dev/dri
+      - /dev/mem
+    volumes:
+      - ollama_data:/root/.ollama
+    ports:
+      - "11434:11434"
+    restart: unless-stopped
+
+  lobechat:
+    image: lobehub/lobe-chat:1.96.8
+    container_name: lobechat
+    depends_on:
+      - ollama
+    ports:
+      - "3210:3210"
+    environment:
+      - OLLAMA_API_BASE_URL=http://ollama:11434/api
+    volumes:
+      - lobechat_data:/app/data
+    restart: unless-stopped
+
+  comfyui:
+    build:
+      context: .
+      dockerfile: Containerfile
+    container_name: comfyui
+    privileged: true
+    devices:
+      - /dev/kfd
+      - /dev/dri
+      - /dev/mem
+    ports:
+      - "8188:8188"
+    volumes:
+      - ./comfyui/models:/app/ComfyUI/models
+      - ./comfyui/output:/app/ComfyUI/output
+    environment:
+      - ROCR_VISIBLE_DEVICES=0
+    restart: unless-stopped
+
+volumes:
+  ollama_data:
+  lobechat_data: 
