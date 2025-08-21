@@ -16,7 +16,7 @@ services:
     restart: unless-stopped
 
   lobechat:
-    image: lobehub/lobe-chat:1.96.8
+    image: lobehub/lobe-chat:latest
     container_name: lobechat
     depends_on:
       - ollama
