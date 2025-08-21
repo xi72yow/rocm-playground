@@ -1,0 +1,670 @@
+
+<!DOCTYPE html>
+<html lang="de">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Voice Agent</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Oxygen, Ubuntu, Cantarell, "Open Sans", "Helvetica Neue", sans-serif;
+            background-color: #1a1a1a;
+            color: #ffffff;
+            min-height: 100vh;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .main-container {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            min-height: 100vh;
+            padding: 2rem;
+        }
+
+        .status-container {
+            display: flex;
+            flex-direction: row;
+            align-items: center;
+            justify-content: center;
+            padding: 0.25em;
+            background-color: rgb(99, 99, 99);
+            border-radius: 0.25em;
+            width: 85px;
+            transition: all 0.3s ease;
+        }
+
+        .status-container.recording {
+            background-color: rgb(80, 80, 80);
+        }
+
+        .status-container.processing {
+            background-color: rgb(60, 60, 60);
+        }
+
+        .status-container.speaking {
+            background-color: rgb(40, 80, 40);
+        }
+
+        .recording-circle {
+            background-color: #666;
+            width: 1em;
+            height: 1em;
+            border-radius: 50%;
+            margin-right: 0.25em;
+            transition: all 0.3s ease;
+        }
+
+        .recording-circle.active {
+            background-color: red;
+            animation: ease pulse 2s infinite;
+        }
+
+        .recording-circle.processing {
+            background-color: #ffa500;
+            animation: ease pulse 1s infinite;
+        }
+
+        .recording-circle.speaking {
+            background-color: #00ff00;
+            animation: ease speaking-pulse 0.8s infinite;
+        }
+
+        @keyframes speaking-pulse {
+            0% {
+                background-color: #00ff00;
+                transform: scale(1);
+            }
+            50% {
+                background-color: #66ff66;
+                transform: scale(1.1);
+            }
+            100% {
+                background-color: #00ff00;
+                transform: scale(1);
+            }
+        }
+
+        .recording-text {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Oxygen, Ubuntu, Cantarell, "Open Sans", "Helvetica Neue", sans-serif;
+            font-size: 0.75em;
+            color: white;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+
+        @keyframes pulse {
+            0% {
+                background-color: red;
+            }
+            50% {
+                background-color: #f06c6c;
+            }
+            100% {
+                background-color: red;
+            }
+        }
+
+
+    </style>
+</head>
+<body>
+    <div class="main-container">
+        <div class="status-container" id="statusContainer">
+            <div class="recording-circle" id="recordingCircle"></div>
+            <div class="recording-text" id="recordingText">Bereit</div>
+        </div>
+    </div>
+
+    <script>
+        class VoiceAgent {
+            constructor() {
+                this.recognition = null;
+                this.isRecording = false;
+                this.synthesis = window.speechSynthesis;
+                this.voices = [];
+                this.selectedVoice = null;
+                this.conversationHistory = [];
+                
+                this.setupSpeechRecognition();
+                this.setupTextToSpeech();
+                this.setupEventListeners();
+                this.log('System initialisiert', 'info');
+            }
+
+            log(message, type = 'info', data = null) {
+                const timestamp = new Date().toLocaleTimeString('de-DE');
+                console.log(`[${timestamp}] ${message}`, data);
+            }
+
+            setupSpeechRecognition() {
+                if ('webkitSpeechRecognition' in window || 'SpeechRecognition' in window) {
+                    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+                    this.recognition = new SpeechRecognition();
+                    
+                    this.recognition.continuous = true;
+                    this.recognition.interimResults = true;
+                    this.recognition.lang = 'de-DE';
+                    
+                    this.recognition.onstart = () => {
+                        this.isRecording = true;
+                        this.updateStatus('recording', 'Aufnahme');
+                        this.log('Spracherkennung gestartet', 'success');
+                    };
+                    
+                    this.recognition.onresult = (event) => {
+                        let interimTranscript = '';
+                        let finalTranscript = '';
+                        
+                        this.log('Spracherkennung Ergebnis', 'info', { 
+                            resultIndex: event.resultIndex, 
+                            resultsLength: event.results.length 
+                        });
+                        
+                        for (let i = event.resultIndex; i < event.results.length; i++) {
+                            const transcript = event.results[i][0].transcript;
+                            const isFinal = event.results[i].isFinal;
+                            
+                            this.log('Transkription Teil', 'info', { 
+                                transcript: transcript, 
+                                isFinal: isFinal 
+                            });
+                            
+                            if (isFinal) {
+                                finalTranscript += transcript;
+                            } else {
+                                interimTranscript += transcript;
+                            }
+                        }
+                        
+                        if (finalTranscript) {
+                            this.log('Finale Transkription erhalten', 'success', { text: finalTranscript });
+                            this.processVoiceCommand(finalTranscript);
+                        } else if (interimTranscript) {
+                            this.log('Interim Transkription', 'info', { text: interimTranscript });
+                        }
+                    };
+                    
+                    this.recognition.onerror = (event) => {
+                        this.log('Spracherkennungsfehler', 'error', { error: event.error });
+                        this.stopRecording();
+                    };
+                    
+                    this.recognition.onend = () => {
+                        this.log('Spracherkennung beendet', 'info');
+                        this.stopRecording();
+                    };
+                    
+                    this.log('Spracherkennung konfiguriert', 'info');
+                } else {
+                    this.log('Spracherkennung nicht unterstützt', 'error');
+                }
+            }
+
+            setupTextToSpeech() {
+                if ('speechSynthesis' in window) {
+                    speechSynthesis.onvoiceschanged = () => {
+                        this.loadVoices();
+                    };
+                    this.loadVoices();
+                    this.log('Text-to-Speech konfiguriert', 'info');
+                } else {
+                    this.log('Text-to-Speech nicht unterstützt', 'error');
+                }
+            }
+
+            loadVoices() {
+                this.voices = speechSynthesis.getVoices();
+                const germanVoices = this.voices.filter(voice => voice.lang.startsWith('de'));
+                this.selectedVoice = germanVoices.length > 0 ? germanVoices[0] : this.voices[0];
+                this.log('Stimmen geladen', 'info', { 
+                    total: this.voices.length, 
+                    german: germanVoices.length,
+                    selected: this.selectedVoice?.name 
+                });
+            }
+
+            setupEventListeners() {
+                // Keyboard Events
+                document.addEventListener('keydown', (e) => {
+                    if (e.code === 'Space' && !this.isRecording && !e.target.matches('input, textarea, select')) {
+                        e.preventDefault();
+                        this.startRecording();
+                    }
+                });
+                document.addEventListener('keyup', (e) => {
+                    if (e.code === 'Space' && this.isRecording) {
+                        e.preventDefault();
+                        this.stopRecording();
+                    }
+                });
+                
+                this.log('Event Listeners konfiguriert', 'info');
+            }
+
+            startRecording() {
+                if (this.recognition && !this.isRecording) {
+                    try {
+                        this.recognition.start();
+                        this.log('Aufnahme gestartet', 'info');
+                    } catch (error) {
+                        this.log('Fehler beim Starten der Aufnahme', 'error', { error: error.message });
+                    }
+                }
+            }
+
+            stopRecording() {
+                if (this.recognition && this.isRecording) {
+                    try {
+                        this.recognition.stop();
+                        this.isRecording = false;
+                        this.updateStatusAfterRecording();
+                        this.log('Aufnahme gestoppt', 'info');
+                    } catch (error) {
+                        this.log('Fehler beim Stoppen der Aufnahme', 'error', { error: error.message });
+                        this.isRecording = false;
+                        this.updateStatus('ready', 'Bereit');
+                    }
+                }
+            }
+
+            updateStatus(state, text) {
+                const container = document.getElementById('statusContainer');
+                const circle = document.getElementById('recordingCircle');
+                const textElement = document.getElementById('recordingText');
+                
+                // Alle Klassen entfernen
+                container.classList.remove('recording', 'processing', 'speaking');
+                circle.classList.remove('active', 'processing', 'speaking');
+                
+                if (state === 'recording') {
+                    container.classList.add('recording');
+                    circle.classList.add('active');
+                } else if (state === 'processing') {
+                    container.classList.add('processing');
+                    circle.classList.add('processing');
+                } else if (state === 'speaking') {
+                    container.classList.add('speaking');
+                    circle.classList.add('speaking');
+                }
+                
+                textElement.textContent = text;
+            }
+
+            updateStatusAfterRecording() {
+                this.updateStatus('processing', 'Verarbeite');
+                
+                // Nach 2 Sekunden zurück zu "Bereit"
+                setTimeout(() => {
+                    this.updateStatus('ready', 'Bereit');
+                }, 2000);
+            }
+
+            async processVoiceCommand(text) {
+                try {
+                    this.log('Sprachbefehl verarbeitet', 'info', { input: text });
+                    
+                    const response = await fetch('http://localhost:11434/api/chat', {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json',
+                        },
+                        body: JSON.stringify({
+                            model: 'gpt-oss',
+                            messages: [
+                                ...this.conversationHistory,
+                                { 
+                                    role: 'system', 
+                                    content: `Du bist ein sarkastischer königlicher Berater. 
+                                    Antworte IMMER auf Deutsch, auch wenn der Benutzer Englisch spricht.
+                                    Sei höflich aber sarkastisch, wie ein erfahrener Berater der schon alles gesehen hat.
+                                    Verwende gehobene aber nicht zu förmliche Sprache.
+                                    
+                                    WICHTIG: Gib NUR sprechfertigen Text aus!
+                                    - KEINE Listen mit Bindestrichen oder Sternchen
+                                    - KEINE Emoticons, Emojis oder Sonderzeichen
+                                    - KEINE Markdown-Formatierung
+                                    - KEINE Zeilenumbrüche
+                                    - KEINE Tabellen oder strukturierte Daten
+                                    
+                                    Gib einfach alle Daten flüssig aus.
+                                    Formuliere einen kurzen, flüssigen Satz mit allen verfügbaren Daten.
+                                    Wenn du Tools verwendest, erkläre kurz was du machst.`
+                                },
+                                { role: 'user', content: text }
+                            ],
+                            temperature: 0.3,
+                            tools: [
+                                {
+                                    type: 'function',
+                                    function: {
+                                        name: 'get_weather',
+                                        description: 'Aktuelle Wetterdaten für einen Ort abrufen',
+                                        parameters: {
+                                            type: 'object',
+                                            properties: {
+                                                location: {
+                                                    type: 'string',
+                                                    description: 'Stadt oder Ort für Wetterdaten'
+                                                }
+                                            },
+                                            required: ['location']
+                                        }
+                                    }
+                                },
+                                {
+                                    type: 'function',
+                                    function: {
+                                        name: 'calculate',
+                                        description: 'Mathematische Berechnungen durchführen',
+                                        parameters: {
+                                            type: 'object',
+                                            properties: {
+                                                expression: {
+                                                    type: 'string',
+                                                    description: 'Mathematischer Ausdruck (z.B. "2+2", "10*5")'
+                                                }
+                                            },
+                                            required: ['expression']
+                                        }
+                                    }
+                                },
+                                {
+                                    type: 'function',
+                                    function: {
+                                        name: 'get_current_time',
+                                        description: 'Aktuelle Zeit und Datum abrufen',
+                                        parameters: {
+                                            type: 'object',
+                                            properties: {
+                                                timezone: {
+                                                    type: 'string',
+                                                    description: 'Zeitzone (optional, Standard: lokale Zeit)'
+                                                }
+                                            },
+                                            required: []
+                                        }
+                                    }
+                                }
+                            ],
+                            stream: false
+                        })
+                    });
+
+                    if (!response.ok) {
+                        throw new Error(`HTTP ${response.status}`);
+                    }
+
+                    const data = await response.json();
+                    this.log('Ollama Antwort erhalten', 'info', { response: data });
+                    
+                    const assistantMessage = data.message;
+                    this.conversationHistory.push({ role: 'user', content: text });
+                    
+                    if (assistantMessage.tool_calls && assistantMessage.tool_calls.length > 0) {
+                        this.log('Tool Calls erkannt', 'info', { toolCalls: assistantMessage.tool_calls });
+                        
+                        const toolResults = [];
+                        for (const toolCall of assistantMessage.tool_calls) {
+                            const toolResult = await this.executeTool(toolCall);
+                            toolResults.push({
+                                tool_call_id: toolCall.id,
+                                role: 'tool',
+                                content: JSON.stringify(toolResult)
+                            });
+                            this.log('Tool ausgeführt', 'success', { 
+                                tool: toolCall.function.name, 
+                                result: toolResult 
+                            });
+                        }
+                        
+                        // Send tool results back to get final response
+                        const finalResponse = await this.getFinalResponseWithToolResults(assistantMessage, toolResults);
+                        this.speakResponse(finalResponse);
+                    } else {
+                        this.conversationHistory.push(assistantMessage);
+                        this.speakResponse(assistantMessage.content);
+                    }
+                    
+                } catch (error) {
+                    this.log('Fehler bei Sprachverarbeitung', 'error', { error: error.message });
+                    this.speakResponse('Entschuldigung, da ist etwas schiefgelaufen. Versuche es nochmal!');
+                }
+            }
+
+            async executeTool(toolCall) {
+                const func = toolCall.function;
+                const args = typeof func.arguments === 'string' ? JSON.parse(func.arguments) : func.arguments;
+                
+                this.log('Tool ausführen', 'info', { tool: func.name, arguments: args });
+                
+                switch (func.name) {
+                    case 'get_weather':
+                        return await this.getWeather(args.location);
+                    case 'calculate':
+                        return await this.calculate(args.expression);
+                    case 'get_current_time':
+                        return await this.getCurrentTime(args.timezone);
+                    default:
+                        throw new Error(`Unbekanntes Tool: ${func.name}`);
+                }
+            }
+
+            async getWeather(location) {
+                try {
+                    this.log('Wetter API aufrufen', 'info', { location });
+                    const response = await fetch(`https://wttr.in/${encodeURIComponent(location)}?format=j1`);
+                    const data = await response.json();
+                    
+                    const current = data.current_condition[0];
+                    const weather = {
+                        location: location,
+                        temperature: current.temp_C + '°C',
+                        condition: current.lang_de ? current.lang_de[0].value : current.weatherDesc[0].value,
+                        humidity: current.humidity + '%',
+                        wind: current.windspeedKmph + ' km/h',
+                        pressure: current.pressure + ' hPa',
+                        feels_like: current.FeelsLikeC + '°C'
+                    };
+                    
+                    this.log('Wetterdaten erhalten', 'success', weather);
+                    return weather;
+                } catch (error) {
+                    this.log('Wetter API Fehler', 'error', { error: error.message });
+                    return { error: 'Wetterdaten nicht verfügbar' };
+                }
+            }
+
+            async calculate(expression) {
+                try {
+                    this.log('Berechnung ausführen', 'info', { expression });
+                    
+                    // Clean expression
+                    let cleanExpression = expression
+                        .replace(/mal/g, '*')
+                        .replace(/plus/g, '+')
+                        .replace(/minus/g, '-')
+                        .replace(/geteilt durch/g, '/')
+                        .replace(/\s+/g, '');
+                    
+                    // Safe evaluation
+                    const result = Function('"use strict"; return (' + cleanExpression + ')')();
+                    
+                    if (!Number.isFinite(result)) {
+                        throw new Error('Ungültige Berechnung');
+                    }
+                    
+                    const calculation = {
+                        expression: expression,
+                        result: result,
+                        formatted: Number.isInteger(result) ? result.toString() : result.toFixed(2)
+                    };
+                    
+                    this.log('Berechnung erfolgreich', 'success', calculation);
+                    return calculation;
+                } catch (error) {
+                    this.log('Berechnungsfehler', 'error', { error: error.message });
+                    return { error: 'Berechnung fehlgeschlagen' };
+                }
+            }
+
+            async getCurrentTime(timezone = null) {
+                try {
+                    this.log('Zeit abrufen', 'info', { timezone });
+                    
+                    const now = new Date();
+                    const timeInfo = {
+                        local: now.toLocaleString('de-DE'),
+                        utc: now.toUTCString(),
+                        timestamp: now.getTime(),
+                        timezone: timezone || 'Lokale Zeit'
+                    };
+                    
+                    if (timezone) {
+                        try {
+                            timeInfo.timezone_time = now.toLocaleString('de-DE', { timeZone: timezone });
+                        } catch (error) {
+                            timeInfo.timezone_time = "Ungültige Zeitzone";
+                        }
+                    }
+                    
+                    this.log('Zeitdaten erhalten', 'success', timeInfo);
+                    return timeInfo;
+                } catch (error) {
+                    this.log('Zeitfehler', 'error', { error: error.message });
+                    return { error: 'Zeitdaten nicht verfügbar' };
+                }
+            }
+
+            async getFinalResponseWithToolResults(assistantMessage, toolResults) {
+                try {
+                    this.log('Finale Antwort mit Tool-Ergebnissen anfordern', 'info');
+                    
+                    const response = await fetch('http://localhost:11434/api/chat', {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json',
+                        },
+                        body: JSON.stringify({
+                            model: 'gpt-oss',
+                            messages: [
+                                ...this.conversationHistory,
+                                assistantMessage,
+                                ...toolResults
+                            ],
+                            stream: false
+                        })
+                    });
+
+                    const data = await response.json();
+                    this.conversationHistory.push(data.message);
+                    
+                    this.log('Finale Antwort erhalten', 'success', { content: data.message.content });
+                    return data.message.content;
+                } catch (error) {
+                    this.log('Fehler bei finaler Antwort', 'error', { error: error.message });
+                    return 'Entschuldigung, ich konnte keine Antwort generieren.';
+                }
+            }
+
+            async getFinalResponse() {
+                try {
+                    this.log('Finale Antwort anfordern', 'info');
+                    
+                    const response = await fetch('http://localhost:11434/api/chat', {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json',
+                        },
+                        body: JSON.stringify({
+                            model: 'gpt-oss',
+                            messages: this.conversationHistory,
+                            temperature: 0.3,
+                            stream: false
+                        })
+                    });
+
+                    const data = await response.json();
+                    this.conversationHistory.push(data.message);
+                    
+                    this.log('Finale Antwort erhalten', 'success', { content: data.message.content });
+                    return data.message.content;
+                } catch (error) {
+                    this.log('Fehler bei finaler Antwort', 'error', { error: error.message });
+                    return 'Entschuldigung, ich konnte keine Antwort generieren.';
+                }
+            }
+
+            speakResponse(text) {
+                try {
+                    // Aggressive Text-Bereinigung für wohlklingende Ausgabe
+                    const cleanText = text
+                        .replace(/\*\*(.*?)\*\*/g, '$1') // Bold entfernen
+                        .replace(/\*(.*?)\*/g, '$1') // Italic entfernen
+                        .replace(/`(.*?)`/g, '$1') // Code entfernen
+                        .replace(/\n+/g, ' ') // Zeilenumbrüche zu Leerzeichen
+                        .replace(/-\s+/g, '') // Listenpunkte entfernen
+                        .replace(/\*\*/g, '') // Restliche Sternchen entfernen
+                        .replace(/🌤️|🌤|🌦️|🌦|🌧️|🌧|🌩️|🌩|🌨️|🌨/g, '') // Wetter-Emojis entfernen
+                        .replace(/:\s+/g, ': ') // Doppelpunkte normalisieren
+                        .replace(/\s*,\s*/g, ', ') // Kommas normalisieren
+                        .replace(/\s*\.\s*/g, '. ') // Punkte normalisieren
+                        .replace(/\s+/g, ' ') // Mehrfache Leerzeichen normalisieren
+                        .replace(/^\s*[-*]\s*/gm, '') // Listenpunkte am Zeilenanfang entfernen
+                        .replace(/\s+/g, ' ') // Nochmal Leerzeichen normalisieren
+                        .trim();
+                    
+                    this.log('TTS starten', 'info', { original: text, cleaned: cleanText });
+                    
+                    if (this.synthesis && this.selectedVoice) {
+                        const utterance = new SpeechSynthesisUtterance(cleanText);
+                        utterance.voice = this.selectedVoice;
+                        utterance.lang = 'de-DE';
+                        utterance.rate = 1.4; // 1.4-fache Geschwindigkeit
+                        utterance.pitch = 1.0;
+                        utterance.volume = 1.0;
+                        
+                        utterance.onstart = () => {
+                            this.updateStatus('speaking', 'Spreche');
+                            this.log('TTS gestartet', 'success');
+                        };
+                        
+                        utterance.onend = () => {
+                            this.updateStatus('ready', 'Bereit');
+                            this.log('TTS beendet', 'info');
+                        };
+                        
+                        utterance.onerror = (error) => {
+                            this.updateStatus('ready', 'Bereit');
+                            this.log('TTS Fehler', 'error', { error: error.error });
+                        };
+                        
+                        this.synthesis.speak(utterance);
+                    } else {
+                        this.log('TTS nicht verfügbar', 'warning');
+                    }
+                } catch (error) {
+                    this.log('TTS Fehler', 'error', { error: error.message });
+                }
+            }
+
+
+        }
+
+        // Initialize when page loads
+        document.addEventListener('DOMContentLoaded', () => {
+            new VoiceAgent();
+        });
+    </script>
+</body>
+</html>
